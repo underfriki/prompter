@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Prompter de Voz</title>
+<meta name="theme-color" content="#0b0d10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Prompter">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: cámara a pantalla completa; panel de texto arriba (cerca del objetivo para que la mirada no se vaya); controles abajo. Tema oscuro deliberado. */
+:root {
+  --ink: #0b0d10;
+  --panel: #15181d;
+  --line: #2a2f37;
+  --text: #f3f1ea;
+  --dim: #7a808a;
+  --accent: #ffc83d;
+  --live: #ff3b3b;
+  --ok: #46d39a;
+  --f-read: "Atkinson Hyperlegible", -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --f-ui: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --size: 30px;
+  --panelH: 40%;
+  --shade: .55;
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--ink); color: var(--text); font-family: var(--f-ui); font-size: 14px; overflow: hidden; overscroll-behavior: none; }
+button, select, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[hidden] { display: none !important; }
+
+/* ---------- pantalla: guion ---------- */
+.edit {
+  position: fixed; inset: 0; display: flex; flex-direction: column; gap: 12px;
+  padding: calc(var(--sat) + 14px) max(16px, env(safe-area-inset-right)) calc(var(--sab) + 14px) max(16px, env(safe-area-inset-left));
+  max-width: 820px; margin: 0 auto;
+}
+.edit header { display: flex; align-items: baseline; gap: 10px; }
+.brand { font-weight: 500; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
+.edit header small { color: var(--dim); }
+.edit textarea {
+  flex: 1; min-height: 0; width: 100%; resize: none; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 16px; font-family: var(--f-read); font-size: 18px; line-height: 1.55;
+}
+.edit .row { display: flex; gap: 10px; }
+.big {
+  flex: 1; border: 0; border-radius: 12px; padding: 16px; font-weight: 500; font-size: 16px;
+  background: var(--accent); color: var(--ink);
+}
+.ghost { background: transparent; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.note { color: var(--dim); font-size: 12px; line-height: 1.5; margin: 0; }
+
+/* ---------- pantalla: cámara ---------- */
+.cam { position: fixed; inset: 0; background: #000; }
+.cam video.live { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.cam.mirror video.live { transform: scaleX(-1); }
+.noCam { position: absolute; inset: 0; display: grid; place-items: center; color: var(--dim); text-align: center; padding: 24px; line-height: 1.6; }
+
+.prompt {
+  position: absolute; left: 0; right: 0; top: 0; height: calc(var(--panelH) + var(--sat));
+  padding-top: var(--sat);
+  background: rgba(8, 9, 12, var(--shade));
+  overflow: hidden; touch-action: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent var(--sat), #000 calc(var(--sat) + 18px), #000 calc(100% - 26px), transparent);
+          mask-image: linear-gradient(to bottom, transparent var(--sat), #000 calc(var(--sat) + 18px), #000 calc(100% - 26px), transparent);
+}
+.stage { position: absolute; inset: var(--sat) 0 0; overflow: hidden; }
+.script {
+  padding: 0 max(18px, env(safe-area-inset-right)) 0 max(18px, env(safe-area-inset-left));
+  font-family: var(--f-read); font-size: var(--size); line-height: 1.32; font-weight: 700;
+  text-shadow: 0 1px 3px rgba(0,0,0,.6);
+  will-change: transform;
+}
+.script p { margin: 0 0 .7em; }
+.w { color: var(--text); transition: color .2s; }
+.w.read { color: rgba(243,241,234,.38); }
+.w.cur { color: var(--accent); }
+.readline { position: absolute; left: 4px; width: 0; height: 0; border: 7px solid transparent; border-left-color: var(--accent); pointer-events: none; }
+
+/* barra superior pequeña dentro de la cámara (estado) */
+.hud {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  top: calc(var(--panelH) + var(--sat) + 10px);
+  display: flex; gap: 10px; align-items: center;
+  background: rgba(0,0,0,.55); border-radius: 999px; padding: 6px 12px; font-size: 13px;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.hud .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); }
+.hud.rec .dot { background: var(--live); animation: pulse 1.1s infinite; }
+.hud.follow:not(.rec) .dot { background: var(--accent); }
+@keyframes pulse { 50% { opacity: .25; } }
+.meter { width: 46px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.18); overflow: hidden; }
+.meter i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .08s; }
+.heard {
+  position: absolute; left: 16px; right: 16px; text-align: center;
+  bottom: calc(var(--sab) + 112px); color: rgba(255,255,255,.75); font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 2px #000;
+}
+
+.controls {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 14px max(16px, env(safe-area-inset-right)) calc(var(--sab) + 16px) max(16px, env(safe-area-inset-left));
+  display: grid; grid-template-columns: 1fr 1fr auto 1fr 1fr; align-items: center; justify-items: center;
+  background: linear-gradient(to top, rgba(0,0,0,.6), transparent);
+}
+.ctl { background: rgba(0,0,0,.45); border: 0; border-radius: 999px; width: 54px; height: 54px; display: grid; place-items: center; }
+.ctl svg { width: 24px; height: 24px; fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ctl.on { background: var(--accent); }
+.ctl.on svg { stroke: var(--ink); }
+.ctl small { display: none; }
+.recBtn { width: 78px; height: 78px; border-radius: 50%; border: 4px solid #fff; background: transparent; display: grid; place-items: center; padding: 0; }
+.recBtn i { width: 60px; height: 60px; border-radius: 50%; background: var(--live); transition: all .2s; }
+.recBtn.on i { width: 30px; height: 30px; border-radius: 6px; }
+.lbl { font-size: 10px; color: rgba(255,255,255,.75); margin-top: 4px; text-align: center; letter-spacing: .04em; }
+.cbox { display: flex; flex-direction: column; align-items: center; }
+
+/* ---------- hojas (ajustes, revisión) ---------- */
+.sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; max-height: 85%; overflow-y: auto;
+  background: var(--panel); border-top: 1px solid var(--line); border-radius: 18px 18px 0 0;
+  padding: 18px max(18px, env(safe-area-inset-right)) calc(var(--sab) + 18px) max(18px, env(safe-area-inset-left));
+  display: flex; flex-direction: column; gap: 16px;
+}
+.sheet h2 { margin: 0; font-size: 13px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.sheet .head { display: flex; justify-content: space-between; align-items: center; }
+.field { display: grid; gap: 6px; }
+.field label { display: flex; justify-content: space-between; color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+.field label b { color: var(--text); font-weight: 400; text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+select { background: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.seg button { border: 1px solid var(--line); background: transparent; border-radius: 10px; padding: 10px; }
+.seg button.on { border-color: var(--accent); color: var(--accent); }
+.scrim { position: fixed; inset: 0; z-index: 19; background: rgba(0,0,0,.4); }
+.review video { width: 100%; max-height: 52vh; border-radius: 12px; background: #000; }
+.toast {
+  position: fixed; left: 50%; transform: translateX(-50%); z-index: 30;
+  top: calc(var(--sat) + 14px); width: min(92vw, 520px);
+  background: var(--panel); border: 1px solid var(--live); border-radius: 12px; padding: 12px 14px; line-height: 1.5; font-size: 13px;
+}
+@media (prefers-reduced-motion: reduce) { .w, .recBtn i { transition: none; } .hud.rec .dot { animation: none; } }
+</style>
+</head>
+<body>
+
+<!-- ============ GUION ============ -->
+<section class="edit" id="editView">
+  <header><span class="brand">Prompter</span><small>lee y el texto te sigue</small></header>
+  <textarea id="text" spellcheck="false" aria-label="Guion"></textarea>
+  <div class="row">
+    <button class="big" id="openCam">Abrir cámara</button>
+  </div>
+  <p class="note">Pega tu guion y abre la cámara. Pulsa el botón rojo para grabar: el texto avanza a medida que lees. Con ▶ ensayas sin grabar. El texto no sale en el vídeo.</p>
+</section>
+
+<!-- ============ CÁMARA ============ -->
+<section class="cam" id="camView" hidden>
+  <video class="live" id="live" playsinline muted autoplay></video>
+  <div class="noCam" id="noCam" hidden></div>
+
+  <div class="prompt" id="prompt">
+    <div class="stage" id="stage"><div class="script" id="script"></div></div>
+    <div class="readline" id="readline"></div>
+  </div>
+
+  <div class="hud" id="hud"><span class="dot"></span><span id="timer">00:00</span><span class="meter" title="Audio que entra en la grabación"><i id="meter"></i></span><span id="modeTxt">Voz</span></div>
+  <div class="heard" id="heard"></div>
+
+  <div class="controls">
+    <div class="cbox"><button class="ctl" id="backBtn" aria-label="Editar guion"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg></button><span class="lbl">Guion</span></div>
+    <div class="cbox"><button class="ctl" id="followBtn" aria-label="Ensayar sin grabar"><svg viewBox="0 0 24 24" id="followIcon"><path d="M8 5l11 7-11 7z"/></svg></button><span class="lbl" id="followLbl">Ensayar</span></div>
+    <button class="recBtn" id="recBtn" aria-label="Grabar"><i></i></button>
+    <div class="cbox"><button class="ctl" id="topBtn" aria-label="Volver al principio"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4h4"/></svg></button><span class="lbl">Inicio</span></div>
+    <div class="cbox"><button class="ctl" id="setBtn" aria-label="Ajustes"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button><span class="lbl">Ajustes</span></div>
+  </div>
+</section>
+
+<!-- ============ AJUSTES ============ -->
+<div class="scrim" id="scrim" hidden></div>
+<section class="sheet" id="settings" hidden aria-label="Ajustes">
+  <div class="head"><h2>Ajustes</h2><button class="ghost" id="closeSet">Listo</button></div>
+  <div class="field"><label>Cómo avanza el texto</label>
+    <div class="seg"><button id="mVoice">Con mi voz</button><button id="mAuto">Velocidad fija</button></div>
+  </div>
+  <div class="field" id="wpmField"><label for="wpm">Velocidad <b id="wpmV"></b></label><input type="range" id="wpm" min="80" max="220" step="5"></div>
+  <div class="field" id="langField"><label for="lang">Idioma</label>
+    <select id="lang"><option value="es-ES">Español</option><option value="ca-ES">Català</option><option value="en-US">English</option><option value="pt-PT">Português</option><option value="fr-FR">Français</option></select>
+  </div>
+  <div class="field"><label for="size">Tamaño del texto <b id="sizeV"></b></label><input type="range" id="size" min="18" max="56" step="1"></div>
+  <div class="field"><label for="panelH">Alto del panel <b id="panelHV"></b></label><input type="range" id="panelH" min="22" max="70" step="1"></div>
+  <div class="field"><label for="shade">Fondo del texto <b id="shadeV"></b></label><input type="range" id="shade" min="0" max="95" step="5"></div>
+  <div class="field"><label>Cámara</label>
+    <div class="seg"><button id="camFront">Delantera</button><button id="camBack">Trasera</button></div>
+  </div>
+  <div class="field"><label>Vista previa</label>
+    <div class="seg"><button id="mirOn">Como espejo</button><button id="mirOff">Normal</button></div>
+  </div>
+  <div class="field"><label>Subtítulo de lo que oye</label>
+    <div class="seg"><button id="hOn">Mostrar</button><button id="hOff">Ocultar</button></div>
+  </div>
+</section>
+
+<!-- ============ REVISIÓN ============ -->
+<section class="sheet review" id="review" hidden aria-label="Vídeo grabado">
+  <div class="head"><h2>Tu toma</h2><span class="note" id="revInfo"></span></div>
+  <video id="revVideo" playsinline controls></video>
+  <div class="row" style="display:flex;gap:10px">
+    <button class="big" id="saveBtn">Guardar / compartir</button>
+    <button class="ghost" id="discardBtn">Descartar</button>
+  </div>
+  <p class="note" id="saveNote">En iPhone, elige «Guardar vídeo» en el menú para llevarlo a Fotos.</p>
+</section>
+
+<script>
+const $ = id => document.getElementById(id);
+const SAMPLE = `Hola, soy Jaume y hoy te voy a enseñar cómo grabar un vídeo sin olvidarte ni una sola frase.
+
+Este teleprompter escucha lo que dices y va pasando el texto a tu ritmo. Si te paras, el texto también se para. Si vas más rápido, te sigue.
+
+Y si te sales del guion para improvisar, no pasa nada. En cuanto vuelvas a leer, encontrará dónde estabas.
+
+Pega aquí tu propio guion y pulsa el botón rojo para grabar.`;
+
+// ---------- ajustes guardados ----------
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('tpm.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('tpm.' + k, JSON.stringify(v)); } catch {} }
+};
+const S = {
+  text: store.get('text', SAMPLE), mode: store.get('mode', 'voice'), wpm: store.get('wpm', 140),
+  lang: store.get('lang', 'es-ES'), size: store.get('size', 30), panelH: store.get('panelH', 40),
+  shade: store.get('shade', 55), facing: store.get('facing', 'user'), mirror: store.get('mirror', true),
+  heard: store.get('heard', true),
+};
+const save = k => store.set(k, S[k]);
+$('text').value = S.text;
+
+function applyLook() {
+  const r = document.documentElement.style;
+  r.setProperty('--size', S.size + 'px');
+  r.setProperty('--panelH', S.panelH + '%');
+  r.setProperty('--shade', S.shade / 100);
+  $('camView').classList.toggle('mirror', S.mirror && S.facing === 'user');
+  $('heard').hidden = !S.heard || S.mode !== 'voice';
+  $('modeTxt').textContent = S.mode === 'voice' ? 'Voz' : S.wpm + ' ppm';
+  const on = (id, v) => $(id).classList.toggle('on', v);
+  on('mVoice', S.mode === 'voice'); on('mAuto', S.mode === 'auto');
+  on('camFront', S.facing === 'user'); on('camBack', S.facing !== 'user');
+  on('mirOn', S.mirror); on('mirOff', !S.mirror);
+  on('hOn', S.heard); on('hOff', !S.heard);
+  $('wpmField').hidden = S.mode !== 'auto'; $('langField').hidden = S.mode !== 'voice';
+  $('wpm').value = S.wpm; $('wpmV').textContent = S.wpm + ' palabras/min';
+  $('lang').value = S.lang;
+  $('size').value = S.size; $('sizeV').textContent = S.size + ' px';
+  $('panelH').value = S.panelH; $('panelHV').textContent = S.panelH + '% de la pantalla';
+  $('shade').value = S.shade; $('shadeV').textContent = S.shade + '%';
+}
+applyLook();
+
+function toast(msg, ms = 6000) {
+  document.querySelector('.toast')?.remove();
+  const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg;
+  document.body.append(t); setTimeout(() => t.remove(), ms);
+}
+
+// ---------- guion en palabras ----------
+const norm = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+const stage = $('stage'), scriptEl = $('script');
+let words = [], keys = [], spans = [], cur = 0, curF = 0;
+
+function build() {
+  scriptEl.innerHTML = ''; words = []; keys = []; spans = [];
+  S.text.split(/\n\s*\n/).forEach(par => {
+    const p = document.createElement('p');
+    par.split(/\s+/).filter(Boolean).forEach(tok => {
+      const s = document.createElement('span'); s.className = 'w'; s.textContent = tok; s.dataset.i = words.length;
+      p.append(s, ' '); words.push(tok); keys.push(norm(tok)); spans.push(s);
+    });
+    scriptEl.append(p);
+  });
+  setCur(0, true);
+}
+
+function setCur(i, jump) {
+  const n = Math.max(0, Math.min(words.length, i));
+  const a = Math.min(cur, n), b = Math.max(cur, n);
+  for (let k = Math.max(0, a - 1); k <= Math.min(spans.length - 1, b + 1); k++) {
+    spans[k].classList.toggle('read', k < n); spans[k].classList.toggle('cur', k === n);
+  }
+  if (jump) spans.forEach((s, k) => { s.classList.toggle('read', k < n); s.classList.toggle('cur', k === n); });
+  cur = n; curF = n;
+  aim(jump);
+}
+
+// ---------- scroll suave con transform (fluido en iPhone) ----------
+let y = 0, target = 0, dragging = false;
+const lineRatio = 0.28;
+function aim(jump) {
+  const el = spans[Math.min(cur, spans.length - 1)]; if (!el) return;
+  target = el.offsetTop - stage.clientHeight * lineRatio + el.offsetHeight * 0.5;
+  if (jump) y = target;
+}
+function placeReadline() {
+  const r = $('readline');
+  r.style.top = (stage.offsetTop + stage.clientHeight * lineRatio - 7) + 'px';
+}
+(function tick() {
+  if (!dragging) y += (target - y) * 0.12;
+  scriptEl.style.transform = `translateY(${-y}px)`;
+  requestAnimationFrame(tick);
+})();
+addEventListener('resize', () => { aim(true); placeReadline(); });
+
+// arrastrar el texto con el dedo para recolocarlo; al soltar, la palabra en la línea pasa a ser la actual
+(() => {
+  let startY = 0, startScroll = 0, moved = false;
+  const pr = $('prompt');
+  pr.addEventListener('pointerdown', e => { dragging = true; moved = false; startY = e.clientY; startScroll = y; pr.setPointerCapture(e.pointerId); });
+  pr.addEventListener('pointermove', e => { if (!dragging) return; const d = e.clientY - startY; if (Math.abs(d) > 6) moved = true; y = startScroll - d; });
+  const end = e => {
+    if (!dragging) return; dragging = false;
+    if (!moved) { const w = document.elementFromPoint(e.clientX, e.clientY); if (w?.dataset?.i) { resetHeard(); setCur(+w.dataset.i); } return; }
+    const line = y + stage.clientHeight * lineRatio;
+    let best = 0, bd = 1e9;
+    spans.forEach((s, k) => { const d = Math.abs(s.offsetTop + s.offsetHeight / 2 - line); if (d < bd) { bd = d; best = k; } });
+    resetHeard(); setCur(best);
+  };
+  pr.addEventListener('pointerup', end); pr.addEventListener('pointercancel', end);
+})();
+
+// ---------- alineación voz → guion ----------
+function lev(a, b) {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) row[j] = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = row;
+  }
+  return prev[b.length];
+}
+function eq(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const L = Math.max(a.length, b.length), m = Math.min(a.length, b.length);
+  if (m < 4) return false;
+  if ((a.startsWith(b) || b.startsWith(a)) && L - m <= 3) return true;
+  return lev(a, b) <= (L >= 7 ? 2 : 1);
+}
+function scoreAt(tail, p) {
+  let i = tail.length - 1, j = p, hits = 0, steps = 0;
+  while (i >= 0 && j >= 0 && steps++ < 30) {
+    if (!keys[j]) { j--; continue; }
+    if (eq(tail[i], keys[j])) { hits++; i--; j--; }
+    else if (j > 0 && eq(tail[i], keys[j - 1])) j--;
+    else i--;
+  }
+  return hits;
+}
+function align(tail) {
+  if (!tail.length || !keys.length) return;
+  const lo = Math.max(0, cur - 12), hi = Math.min(keys.length - 1, cur + 40);
+  let best = null;
+  for (let p = lo; p <= hi; p++) {
+    let t = null;
+    if (eq(tail[tail.length - 1], keys[p])) t = tail;
+    else if (tail.length > 1 && eq(tail[tail.length - 2], keys[p])) t = tail.slice(0, -1);
+    if (!t) continue;
+    const hits = scoreAt(t, p);
+    const near = p >= cur - 1 && p <= cur + 2;
+    const ok = hits >= 3 || (hits >= 2 && p >= cur - 2 && p <= cur + 12) || (hits === 1 && near && keys[p].length >= 3 && p >= cur);
+    if (!ok || (p < cur - 2 && hits < 4)) continue;
+    const score = hits - Math.abs(p - cur) * 0.03;
+    if (!best || score > best.score) best = { p, score };
+  }
+  if (best && best.p + 1 !== cur) setCur(best.p + 1);
+}
+
+// ---------- reconocimiento de voz ----------
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, listening = false, finals = [], lastResultAt = 0;
+const resetHeard = () => { finals = []; };
+
+function startListen() {
+  if (!SR) { toast('Este navegador no reconoce la voz. En iPhone usa Safari (con Siri y Dictado activados), o cambia en Ajustes a «Velocidad fija».', 9000); return false; }
+  listening = true; finals = [];
+  rec = new SR();
+  rec.lang = S.lang; rec.continuous = true; rec.interimResults = true;
+  rec.onresult = e => {
+    lastResultAt = performance.now();
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const txt = e.results[i][0].transcript;
+      if (e.results[i].isFinal) finals.push(...txt.split(/\s+/).map(norm).filter(Boolean));
+      else interim += ' ' + txt;
+    }
+    finals = finals.slice(-10);
+    const tail = [...finals, ...interim.split(/\s+/).map(norm).filter(Boolean)].slice(-8);
+    $('heard').textContent = (interim.trim() || tail.join(' '));
+    align(tail);
+  };
+  rec.onerror = e => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      toast('No puedo usar el reconocimiento de voz. En iPhone: Ajustes › General › Teclado › activa «Dictado», y permite el micrófono a Safari. También puedes usar «Velocidad fija».', 10000);
+      stopListen();
+    } else if (e.error === 'audio-capture') {
+      toast('El micrófono está ocupado por la grabación y no puedo escucharte a la vez. Cambia a «Velocidad fija» en Ajustes.', 9000);
+    }
+  };
+  rec.onend = () => { if (listening) setTimeout(() => { if (listening) try { rec.start(); } catch {} }, 120); };
+  try { rec.start(); } catch {}
+  return true;
+}
+function stopListen() { listening = false; try { rec && rec.abort(); } catch {} }
+
+// ---------- avance a velocidad fija ----------
+let autoOn = false, lastT = 0;
+(function autoTick(t) {
+  if (autoOn && !dragging && lastT) {
+    curF += (S.wpm / 60) * (t - lastT) / 1000;
+    const n = Math.floor(curF);
+    if (n !== cur) { const keep = curF; setCur(n); curF = keep; }
+  }
+  lastT = t; requestAnimationFrame(autoTick);
+})(0);
+
+// ---------- seguimiento (voz o auto) ----------
+let following = false;
+function startFollow() {
+  if (following) return true;
+  if (S.mode === 'voice') { if (!startListen()) return false; }
+  else { autoOn = true; curF = cur; }
+  following = true; refreshHud(); return true;
+}
+function stopFollow() {
+  following = false; autoOn = false; stopListen(); refreshHud();
+}
+
+// ---------- cámara ----------
+let stream = null, audioCtx = null, analyser = null;
+async function openCamera() {
+  stopCamera();
+  $('noCam').hidden = true;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: S.facing, width: { ideal: 1080 }, height: { ideal: 1920 }, frameRate: { ideal: 30 } },
+      audio: { echoCancellation: true, noiseSuppression: true },
+    });
+    $('live').srcObject = stream;
+    await $('live').play().catch(() => {});
+    hookMeter();
+  } catch (err) {
+    $('noCam').hidden = false;
+    $('noCam').textContent = !navigator.mediaDevices ? 'La cámara sólo funciona si abres la app desde una dirección https.' :
+      'No tengo acceso a la cámara o al micrófono. Permítelo en Safari (aA › Ajustes del sitio web) y vuelve a abrir la cámara.';
+  }
+}
+function stopCamera() { stream?.getTracks().forEach(t => t.stop()); stream = null; }
+
+function hookMeter() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx.resume();
+    const src = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser(); analyser.fftSize = 512;
+    src.connect(analyser);
+  } catch { analyser = null; }
+}
+(function meterTick() {
+  if (analyser) {
+    const d = new Uint8Array(analyser.fftSize); analyser.getByteTimeDomainData(d);
+    let m = 0; for (const v of d) m = Math.max(m, Math.abs(v - 128));
+    $('meter').style.width = Math.min(100, m / 64 * 100) + '%';
+  }
+  requestAnimationFrame(meterTick);
+})();
+
+// ---------- grabación ----------
+let recorder = null, chunks = [], recStart = 0, lastBlob = null, lastType = '';
+const pickType = () => ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']
+  .find(t => window.MediaRecorder?.isTypeSupported?.(t)) || '';
+
+function startRecording() {
+  if (!stream) { toast('Primero necesito acceso a la cámara.'); return; }
+  if (!window.MediaRecorder) { toast('Este navegador no puede grabar vídeo.'); return; }
+  lastType = pickType();
+  try { recorder = new MediaRecorder(stream, lastType ? { mimeType: lastType, videoBitsPerSecond: 8_000_000 } : undefined); }
+  catch { recorder = new MediaRecorder(stream); }
+  chunks = [];
+  recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
+  recorder.onstop = showReview;
+  recorder.start(1000);
+  recStart = Date.now();
+  $('recBtn').classList.add('on'); $('recBtn').setAttribute('aria-label', 'Parar grabación');
+  startFollow(); refreshHud(); keepAwake();
+}
+function stopRecording() {
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+  $('recBtn').classList.remove('on'); $('recBtn').setAttribute('aria-label', 'Grabar');
+  stopFollow(); refreshHud();
+}
+const isRecording = () => recorder && recorder.state === 'recording';
+
+setInterval(() => {
+  if (!isRecording()) return;
+  const s = Math.floor((Date.now() - recStart) / 1000);
+  $('timer').textContent = String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+}, 250);
+
+function showReview() {
+  const type = recorder.mimeType || lastType || 'video/mp4';
+  lastBlob = new Blob(chunks, { type });
+  const v = $('revVideo'); if (v.src) URL.revokeObjectURL(v.src);
+  v.src = URL.createObjectURL(lastBlob);
+  $('revInfo').textContent = $('timer').textContent + ' · ' + (lastBlob.size / 1048576).toFixed(1) + ' MB';
+  $('review').hidden = false; $('scrim').hidden = false;
+}
+async function saveTake() {
+  if (!lastBlob) return;
+  const ext = lastBlob.type.includes('mp4') ? 'mp4' : 'webm';
+  const d = new Date(), pad = n => String(n).padStart(2, '0');
+  const name = `toma-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.${ext}`;
+  const file = new File([lastBlob], name, { type: lastBlob.type });
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file] }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name;
+  document.body.append(a); a.click(); a.remove();
+}
+function closeReview() { $('review').hidden = true; $('scrim').hidden = true; $('revVideo').pause(); }
+
+// ---------- pantalla encendida ----------
+let wake = null;
+async function keepAwake() { try { wake = await navigator.wakeLock?.request('screen'); } catch {} }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !$('camView').hidden) keepAwake(); });
+
+// ---------- HUD ----------
+function refreshHud() {
+  const h = $('hud');
+  h.classList.toggle('rec', !!isRecording());
+  h.classList.toggle('follow', following);
+  if (!isRecording()) $('timer').textContent = following ? 'Ensayando' : 'Listo';
+  $('followBtn').classList.toggle('on', following && !isRecording());
+  $('followLbl').textContent = following && !isRecording() ? 'Parar' : 'Ensayar';
+  $('followIcon').innerHTML = following && !isRecording() ? '<path d="M7 5v14M17 5v14"/>' : '<path d="M8 5l11 7-11 7z"/>';
+  if (!following) $('heard').textContent = '';
+}
+
+// ---------- navegación ----------
+async function goCamera() {
+  S.text = $('text').value.trim() || SAMPLE; save('text');
+  $('editView').hidden = true; $('camView').hidden = false;
+  build(); placeReadline(); refreshHud();
+  keepAwake();
+  await openCamera();
+  aim(true); placeReadline();
+}
+function goEdit() {
+  if (isRecording()) stopRecording();
+  stopFollow(); stopCamera();
+  $('camView').hidden = true; $('editView').hidden = false;
+}
+
+$('openCam').onclick = goCamera;
+$('backBtn').onclick = goEdit;
+$('recBtn').onclick = () => isRecording() ? stopRecording() : startRecording();
+$('followBtn').onclick = () => { if (isRecording()) return; following ? stopFollow() : startFollow(); };
+$('topBtn').onclick = () => { resetHeard(); setCur(0, true); };
+$('text').addEventListener('input', () => { S.text = $('text').value; save('text'); });
+
+const openSheet = () => { $('settings').hidden = false; $('scrim').hidden = false; };
+const closeSheet = () => { $('settings').hidden = true; if ($('review').hidden) $('scrim').hidden = true; aim(true); placeReadline(); };
+$('setBtn').onclick = openSheet; $('closeSet').onclick = closeSheet;
+$('scrim').onclick = () => { if (!$('settings').hidden) closeSheet(); };
+$('saveBtn').onclick = saveTake;
+$('discardBtn').onclick = () => { lastBlob = null; closeReview(); };
+
+const setMode = m => { const was = following; if (was) stopFollow(); S.mode = m; save('mode'); applyLook(); if (was) startFollow(); };
+$('mVoice').onclick = () => setMode('voice'); $('mAuto').onclick = () => setMode('auto');
+$('wpm').oninput = e => { S.wpm = +e.target.value; save('wpm'); applyLook(); };
+$('lang').onchange = e => { S.lang = e.target.value; save('lang'); if (listening) { stopListen(); startListen(); } };
+$('size').oninput = e => { S.size = +e.target.value; save('size'); applyLook(); aim(true); };
+$('panelH').oninput = e => { S.panelH = +e.target.value; save('panelH'); applyLook(); aim(true); placeReadline(); };
+$('shade').oninput = e => { S.shade = +e.target.value; save('shade'); applyLook(); };
+const setFacing = f => { if (isRecording()) { toast('Para cambiar de cámara, para antes la grabación.'); return; } S.facing = f; save('facing'); applyLook(); if (!$('camView').hidden) openCamera(); };
+$('camFront').onclick = () => setFacing('user'); $('camBack').onclick = () => setFacing('environment');
+$('mirOn').onclick = () => { S.mirror = true; save('mirror'); applyLook(); };
+$('mirOff').onclick = () => { S.mirror = false; save('mirror'); applyLook(); };
+$('hOn').onclick = () => { S.heard = true; save('heard'); applyLook(); };
+$('hOff').onclick = () => { S.heard = false; save('heard'); applyLook(); };
+
+// ---------- instalable (funciona sin conexión salvo el reconocimiento de voz) ----------
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
